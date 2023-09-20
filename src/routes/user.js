@@ -9,35 +9,31 @@ router.get("/", (req, res) => {
   res.status(200).json("Server on port 8000 and database is connected");
 });
 
-router.get("/users/:idUser", (req, res) => {
-  const { idUser } = req.params;
+router.get("/users/:mail", (req, res) => {
+  const { mail } = req.params;
   const { password } = req.body;
-  if (idUser.length == 10 && !isNaN(idUser)) {
-    mysqlConnection.query(
-      "SELECT hash FROM user where idUser = ?",
-      [idUser],
-      (error, rows, fields) => {
-        if (!error) {
-          if (rows.length === 0) {
-            res.status(404).send(false);
-          } else {
-            hash = rows[0].hash;
-            bcrypt.compare(password, hash, (err, succes) => {
-              if (succes) {
-                res.status(200).send(true);
-              } else {
-                res.status(200).send(false);
-              }
-            });
-          }
+  mysqlConnection.query(
+    "SELECT hash FROM user where mail = ?",
+    [mail],
+    (error, rows, fields) => {
+      if (!error) {
+        if (rows.length === 0) {
+          res.status(404).send(false);
         } else {
-          res.status(500).send(false);
+          hash = rows[0].hash;
+          bcrypt.compare(password, hash, (err, succes) => {
+            if (succes) {
+              res.status(200).send(true);
+            } else {
+              res.status(200).send(false);
+            }
+          });
         }
+      } else {
+        res.status(500).send(false);
       }
-    );
-  } else {
-    res.status(500).send(false);
-  }
+    }
+  );
 });
 
 router.post("/users", (req, res) => {
@@ -101,12 +97,30 @@ router.get("/user-info", (req, res) => {
           }
         }
       );
-    } else {
-      res.status(500).send({ error: "Invalid id form" });
     }
   } catch (error) {
     res.status(403).send({ error: error.message });
   }
+});
+
+router.put("/users/:id/update", (req, res) => {
+  const token = req.headers["token"];
+  const type = jwt.decode(token).type;
+  if (type != "Admin") {
+    res.status(403).send(false);
+  }
+  const { id } = req.params;
+  mysqlConnection.query(
+    "UPDATE user SET type = ? WHERE idUser = ?",
+    ["Asesor", id],
+    (error, rows, fields) => {
+      if (!error) {
+        res.status(200).send(true);
+      } else {
+        res.status(500).send(false);
+      }
+    }
+  );
 });
 
 module.exports = router;

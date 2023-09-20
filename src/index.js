@@ -10,7 +10,6 @@ app.use(express.json());
 //Morgan
 app.use(morgan("dev"));
 //Routes
-app.use(require("./routes/firebase_messaging"));
 app.use(require("./routes/user"));
 app.use(require("./routes/token"));
 app.use(require("./routes/player"));

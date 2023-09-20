@@ -19,7 +19,7 @@ router.get("/counselings/private/:idUser", (req, res) => {
     }
     if (idUser.length == 10 && !isNaN(idUser)) {
       mysqlConnection.query(
-        "SELECT c.idCounseling from counseling c, counseling_enrolled ce WHERE c.type = ? AND ce.idUser = ? AND ce.idCounseling = c.idCounseling;",
+        "SELECT c.idCounseling from counseling c, counseling_enrolled ce WHERE c.type = ? AND ce.idUser = ? AND ce.idCounseling = c.idCounseling AND end_time is null;",
         ["Privada", idUser],
         (error, rows, fields) => {
           if (!error) {
@@ -45,6 +45,44 @@ router.get("/counselings/private/:idUser", (req, res) => {
   }
 });
 
+router.put("/counselings/private/:idCounseling/end", async (req, res) => {
+  const { idCounseling } = req.params;
+  const end_time = req.body["end_time"];
+  const advised = req.body.idAdvisedUser;
+  const advisor = req.body.advisorKey;
+  try {
+    await queryAsync("START TRANSACTION");
+    advisedCount = await queryAsync(
+      "SELECT counselings_completed FROM player WHERE idUser = ?",
+      [advised]
+    );
+    advisedCount = advisedCount[0].counselings_completed;
+    advisorCount = await queryAsync(
+      "SELECT counselings_completed FROM player WHERE idUser = ?",
+      [advisor]
+    );
+    advisorCount = advisorCount[0].counselings_completed;
+    result1 = await queryAsync(
+      "UPDATE counseling SET end_time = ? WHERE idCounseling = ?",
+      [end_time, idCounseling]
+    );
+    result2 = await queryAsync(
+      "UPDATE player SET counselings_completed = ? WHERE idUser = ?",
+      [advisedCount + 1, advised]
+    );
+    result3 = await queryAsync(
+      "UPDATE player SET counselings_completed = ? WHERE idUser = ?",
+      [advisorCount + 1, advisor]
+    );
+    await queryAsync("COMMIT");
+    res.status(200).send(true);
+  } catch (e) {
+    console.log(e);
+    await queryAsync("ROLLBACK");
+    res.status(500).send(false);
+  }
+});
+
 router.get("/counselings/private", (req, res) => {
   const token = req.headers["token"];
   try {
@@ -67,8 +105,54 @@ router.get("/counselings/private", (req, res) => {
           AND c.idCounseling = ce.idCounseling
           AND d.idCounseling = c.idCounseling
           AND d.confirmed = 0
+          AND c.end_time is null
           AND d.idAdvisor is null
   GROUP BY c.idCounseling;`,
+        ["Privada", idUser],
+        (error, rows, fields) => {
+          if (!error) {
+            const idCounselings = [];
+            for (const key in rows) {
+              if (Object.hasOwnProperty.call(rows, key)) {
+                idCounselings.push(rows[key].idCounseling);
+              }
+            }
+            console.log(idCounselings);
+            res.status(200).send({
+              idCounselings: idCounselings,
+            });
+          }
+        }
+      );
+    } else {
+      res.status(500).send({ error: "Invalid id form" });
+    }
+  } catch (error) {
+    res.status(403).send({ error: error.message });
+  }
+});
+
+router.get("/counselings/private/advising/me", (req, res) => {
+  const token = req.headers["token"];
+  try {
+    const payload = jwt.verify(token, secret);
+    if (Date.now() > payload.exp) {
+      return res.status(403).send({ error: "token expired" });
+    }
+    const idUser = jwt.decode(token).idUser;
+    if (idUser.length == 10 && !isNaN(idUser)) {
+      mysqlConnection.query(
+        `SELECT 
+        c.idCounseling
+    FROM
+        counseling c,
+        counseling_advisor ca
+    WHERE
+        type = ?
+            AND ca.idUser = ?
+            AND ca.idCounseling = c.idCounseling
+            AND c.end_time IS null
+    GROUP BY c.idCounseling;`,
         ["Privada", idUser],
         (error, rows, fields) => {
           if (!error) {
@@ -356,6 +440,109 @@ router.get("/counselings/private/:idCounseling/all-data", async (req, res) => {
     res.status(500).send({ error: err });
   }
 });
+
+router.get(
+  "/counselings/private/:idCounseling/me/all-data",
+  async (req, res) => {
+    const { idCounseling } = req.params;
+    try {
+      const counselingRow = await queryAsync(
+        `SELECT 
+      c.idCounseling,
+      c.name counselingName,
+      c.start_time,
+      c.end_time,
+      ce.idUser idAdvisedUser,
+      c.topics,
+      u.name advisedName
+  FROM
+      counseling c,
+      counseling_enrolled ce,
+      user u
+  WHERE
+      c.idCounseling = ?
+          AND u.idUser = ce.idUser
+          AND c.idCounseling = ce.idCounseling;`,
+        [idCounseling]
+      );
+
+      const dayRows = await queryAsync(
+        `SELECT 
+      d.idAdvisor,
+      d.idModule_start,
+      d.day,
+      d.idModule_end,
+      d.idDayOfCounseling,
+      d.confirmed,
+      c.name,
+      c.start_time,
+      c.end_time
+  FROM
+      counseling c
+          INNER JOIN
+      day_of_counseling d ON c.idCounseling = d.idCounseling
+  WHERE
+      c.idCounseling = ?
+          AND c.type = ?
+          AND d.idAdvisor IS NULL;`,
+        [idCounseling, "Privada"]
+      );
+
+      const days = [];
+
+      for (const key in dayRows) {
+        if (Object.hasOwnProperty.call(dayRows, key)) {
+          const day = {
+            day: dayRows[key].day,
+            idModule_start: dayRows[key].idModule_start,
+            idModule_end: dayRows[key].idModule_end,
+            idDay: dayRows[key].idDayOfCounseling,
+            confirmed: dayRows[key].confirmed,
+            idAdvisor: dayRows[key].idAdvisor,
+          };
+          days.push(day);
+        }
+      }
+
+      const advisorRows = await queryAsync(
+        `SELECT 
+      ca.idUser advisorKey,
+        u.name advisorName
+        FROM
+          counseling_advisor ca,
+                user u
+      WHERE
+          u.idUser = ca.idUser
+      AND
+          ca.idCounseling = ?`,
+        [idCounseling]
+      );
+      let advisorName = null;
+      let advisorKey = null;
+      if (advisorRows.length !== 0) {
+        advisorName = advisorRows[0].advisorName;
+        advisorKey = advisorRows[0].idUser;
+      }
+      let map = {
+        idCounseling: counselingRow[0].idCounseling,
+        name: counselingRow[0].counselingName,
+        start_time: counselingRow[0].start_time,
+        end_time: counselingRow[0].end_time,
+        type: "Privada",
+        advisedName: counselingRow[0].advisedName,
+        idAdvisedUser: counselingRow[0].idAdvisedUser,
+        advisorName: advisorName,
+        advisorKey: advisorKey,
+        topics: counselingRow[0].topics,
+        days: days,
+      };
+      res.status(200).send(map);
+    } catch (err) {
+      console.log(err);
+      res.status(500).send({ error: err });
+    }
+  }
+);
 
 router.post("/counselings/private/:idCounseling/days", async (req, res) => {
   const { idAdvisor } = req.body;
